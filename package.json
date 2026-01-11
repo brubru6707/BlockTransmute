@@ -1,0 +1,32 @@
+{
+  "name": "minecraft-2d-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@types/pako": "^2.0.4",
+    "autoprefixer": "^10.4.23",
+    "jszip": "^3.10.1",
+    "next": "^15.1.4",
+    "pako": "^2.1.0",
+    "prismarine-chunk": "^1.39.0",
+    "prismarine-nbt": "^2.8.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "eslint": "^9.17.0",
+    "eslint-config-next": "^15.1.4",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3"
+  }
+}
