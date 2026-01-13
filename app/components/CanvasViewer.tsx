@@ -9,6 +9,7 @@ interface CanvasViewerProps {
   yLevel: number
   zoom: number
   onZoomChange: (zoom: number) => void
+  onBlocksFound?: (blocks: Set<string>) => void
 }
 
 export default function CanvasViewer({
@@ -16,6 +17,7 @@ export default function CanvasViewer({
   yLevel,
   zoom,
   onZoomChange,
+  onBlocksFound,
 }: CanvasViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -67,6 +69,9 @@ export default function CanvasViewer({
     let chunksSkipped = 0
     const renderBlocksStart = performance.now()
     
+    // Track all unique blocks found
+    const uniqueBlocks = new Set<string>()
+    
     // Debug: Sample some block names
     let blockNameSamples = new Set<string>()
     let sampleCount = 0
@@ -101,6 +106,9 @@ export default function CanvasViewer({
             blocksSkipped++
             continue
           }
+          
+          // Track unique blocks
+          uniqueBlocks.add(blockName)
           
           // Sample block names for debugging
           if (sampleCount < 20) {
@@ -139,6 +147,11 @@ export default function CanvasViewer({
     console.log(`[CANVAS] Chunks: ${chunksRendered} rendered, ${chunksSkipped} skipped`)
     console.log(`[CANVAS] Blocks: ${blocksRendered} rendered, ${blocksSkipped} skipped`)
     console.log(`[CANVAS] Block rendering took ${renderBlocksTime.toFixed(2)}ms`)
+    
+    // Notify parent of blocks found
+    if (onBlocksFound && uniqueBlocks.size > 0) {
+      onBlocksFound(uniqueBlocks)
+    }
 
     // Draw loading message if no chunks
     if (regionData.chunks.length === 0) {
@@ -147,6 +160,33 @@ export default function CanvasViewer({
       ctx.textAlign = 'center'
       ctx.fillText('No chunks loaded', canvas.width / 2, canvas.height / 2)
     }
+
+    // Calculate and display center coordinates
+    const centerScreenX = canvas.width / 2
+    const centerScreenY = canvas.height / 2
+    const centerWorldX = Math.floor((centerScreenX - offsetX) / scale + regionData.minX)
+    const centerWorldZ = Math.floor((centerScreenY - offsetY) / scale + regionData.minZ)
+
+    // Draw coordinates overlay at center
+    const coordText = `X: ${centerWorldX}, Z: ${centerWorldZ}`
+    ctx.font = '14px "Press Start 2P", monospace'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    
+    // Draw background for text
+    const textMetrics = ctx.measureText(coordText)
+    const padding = 8
+    const bgX = centerScreenX - textMetrics.width / 2 - padding
+    const bgY = centerScreenY - 14 - padding
+    const bgWidth = textMetrics.width + padding * 2
+    const bgHeight = 28 + padding * 2
+    
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'
+    ctx.fillRect(bgX, bgY, bgWidth, bgHeight)
+    
+    // Draw text
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillText(coordText, centerScreenX, centerScreenY)
 
     const totalRenderTime = performance.now() - renderStart
     console.log(`[CANVAS] === Total render time: ${totalRenderTime.toFixed(2)}ms ===\n`)

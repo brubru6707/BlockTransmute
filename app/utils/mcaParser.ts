@@ -109,168 +109,102 @@ export async function parseMCAFile(data: ArrayBuffer, filename: string): Promise
 
 // Parse top blocks from NBT chunk data (highest non-air block at each X,Z)
 function parseChunkTopBlocks(chunkData: any, chunkX: number, chunkZ: number): Map<string, string> {
-  // Temporary storage: key "x,z" -> array of {y, blockName}
-  const blocksByXZ = new Map<string, Array<{y: number, blockName: string}>>()
+  const topBlockMap = new Map<string, {y: number, blockName: string}>()
   
-  let debuggedSections = false
-  let debuggedBlockStates = false
-  let debuggedPalette = false
-
-  try {
-    // Navigate to sections array
-    const sections = chunkData?.value?.sections?.value?.value || chunkData?.value?.Level?.value?.Sections?.value?.value
+  // Navigate to sections array
+  const sections = chunkData?.value?.sections?.value?.value || chunkData?.value?.Level?.value?.Sections?.value?.value
+  
+  if (!sections || !Array.isArray(sections)) {
+    return new Map<string, string>()
+  }
+  
+  for (const section of sections) {
+    const sectionValue = section.value || section
     
-    if (!sections || !Array.isArray(sections)) {
-      if (!debuggedSections) {
-        console.warn(`[CLIENT] No sections found for chunk ${chunkX},${chunkZ}`)
-        console.warn('[CLIENT] ChunkData keys:', Object.keys(chunkData?.value || {}))
-        debuggedSections = true
-      }
-      return blocks
-    }
+    // Robust Y-parsing: Handle object wrappers and primitive values
+    let sectionY = sectionValue.Y?.value ?? sectionValue.y?.value ?? sectionValue.Y ?? sectionValue.y ?? 0
+    if (typeof sectionY === 'object') sectionY = 0 
+
+    const yOffset = sectionY * 16
     
-    if (!debuggedSections) {
-      console.log(`[CLIENT] DEBUG: Found ${sections.length} sections for chunk ${chunkX},${chunkZ}`)
-      debuggedSections = true
+    // Get block states (Support both 1.16+ naming 'block_states' and older 'BlockStates')
+    const blockStates = sectionValue.block_states?.value || sectionValue.BlockStates?.value
+    if (!blockStates) continue
+
+    // Get palette
+    const palette = blockStates.palette?.value?.value || blockStates.Palette?.value?.value
+    if (!palette || !Array.isArray(palette)) continue
+
+    // Extract block names from palette
+    const paletteBlocks = palette.map((entry: any) => {
+      return entry.value?.Name?.value || entry.Name?.value || 'minecraft:air'
+    })
+
+    // === CASE 1: UNIFORM SECTION (Single Block) ===
+    // If only 1 block type exists, the whole 16x16x16 chunk is filled with it.
+    if (paletteBlocks.length === 1) {
+      const blockName = paletteBlocks[0]
+      if (!blockName.includes('air')) {
+        for (let y = 0; y < 16; y++) {
+          for (let x = 0; x < 16; x++) {
+            for (let z = 0; z < 16; z++) {
+              const worldY = yOffset + y
+              const xzKey = `${x},${z}`
+              const currentTop = topBlockMap.get(xzKey)
+              
+              if (!currentTop || worldY > currentTop.y) {
+                topBlockMap.set(xzKey, { y: worldY, blockName })
+              }
+            }
+          }
+        }
+      }
+      continue
     }
 
-    let sectionsWithBlockStates = 0
-    let sectionsWithPalette = 0
-    let blocksAdded = 0
-
-    for (const section of sections) {
-      const sectionValue = section.value || section
-      const yOffset = (sectionValue.Y?.value ?? sectionValue.y?.value ?? 0) * 16
-      
-      // Get block states
-      const blockStates = sectionValue.block_states?.value || sectionValue.BlockStates?.value
-      if (!blockStates) {
-        if (!debuggedBlockStates) {
-          console.warn('[CLIENT] No blockStates. Section keys:', Object.keys(sectionValue))
-          debuggedBlockStates = true
-        }
+    // === CASE 2: COMPLEX SECTION (Mixed Blocks) ===
+    // FIX: Robustly find the data array. Try ALL known locations.
+    const dataTag = blockStates.data || blockStates.Data
+    const dataArray = dataTag?.value?.value || dataTag?.value
+    
+    if (!dataArray || !Array.isArray(dataArray)) {
+        // If we have a complex palette but no data, we cannot parse this section.
+        // This log will help us confirm if we are still missing data.
+        // console.warn(`[DEBUG] Skipped complex section at Y=${sectionY} (Palette=${paletteBlocks.length}, No Data Found)`)
         continue
-      }
-      sectionsWithBlockStates++
+    }
 
-      // Get palette
-      const palette = blockStates.palette?.value?.value || blockStates.Palette?.value?.value
-      if (!palette || !Array.isArray(palette)) {
-        if (!debuggedPalette) {
-          console.warn('[CLIENT] No palette. blockStates keys:', Object.keys(blockStates))
-          debuggedPalette = true
-        }
-        continue
-      }
-      sectionsWithPalette++
-
-      // Extract block names from palette
-      const paletteBlocks = palette.map((entry: any) => {
-        const name = entry.value?.Name?.value || entry.Name?.value || 'minecraft:air'
-        return name
-      })
-
-      // If there's only one block in palette, record it for this section
-      if (paletteBlocks.length === 1) {
-        const blockName = paletteBlocks[0]
-        if (!blockName.includes('air')) {
-          for (let y = 0; y < 16; y++) {
-            for (let x = 0; x < 16; x++) {
-              for (let z = 0; z < 16; z++) {
-                const worldX = chunkX * 16 + x
-                const worldY = yOffset + y
-                const worldZ = chunkZ * 16 + z
-                const xzKey = `${x},${z}`
-                if (!blocksByXZ.has(xzKey)) blocksByXZ.set(xzKey, [])
-                blocksByXZ.get(xzKey)!.push({ y: worldY, blockName })
-                blocksAdded++
-              }
-            }
-          }
-        }
-        continue
-      }
-
-      // Handle block states data (packed array)
-      const dataArray = blockStates.data?.value?.value || blockStates.Data?.value?.value
-      if (!dataArray || !Array.isArray(dataArray)) {
-        // No data means all blocks are palette[0]
-        const blockName = paletteBlocks[0]
-        if (!blockName.includes('air')) {
-          for (let y = 0; y < 16; y++) {
-            for (let x = 0; x < 16; x++) {
-              for (let z = 0; z < 16; z++) {
-                const worldX = chunkX * 16 + x
-                const worldY = yOffset + y
-                const worldZ = chunkZ * 16 + z
-                const xzKey = `${x},${z}`
-                if (!blocksByXZ.has(xzKey)) blocksByXZ.set(xzKey, [])
-                blocksByXZ.get(xzKey)!.push({ y: worldY, blockName })
-                blocksAdded++
-              }
-            }
-          }
-        }
-        continue
-      }
-
-      // Calculate bits per block
-      const bitsPerBlock = Math.max(4, Math.ceil(Math.log2(paletteBlocks.length)))
-      
-      // Parse all blocks in this section
-      for (let y = 0; y < 16; y++) {
-        for (let x = 0; x < 16; x++) {
-          for (let z = 0; z < 16; z++) {
-            const blockIndex = (y * 16 * 16) + (z * 16) + x
-            const paletteIndex = getBlockStateIndex(dataArray, blockIndex, bitsPerBlock)
-            
-            if (paletteIndex >= 0 && paletteIndex < paletteBlocks.length) {
-              const blockName = paletteBlocks[paletteIndex]
-              if (!blockName.includes('air')) {
-                const worldX = chunkX * 16 + x
-                const worldY = yOffset + y
-                const worldZ = chunkZ * 16 + z
-                const xzKey = `${x},${z}`
-                if (!blocksByXZ.has(xzKey)) blocksByXZ.set(xzKey, [])
-                blocksByXZ.get(xzKey)!.push({ y: worldY, blockName })
-                blocksAdded++
+    // Calculate bits per block
+    const bitsPerBlock = Math.max(4, Math.ceil(Math.log2(paletteBlocks.length)))
+    
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) {
+        for (let z = 0; z < 16; z++) {
+          const blockIndex = (y * 16 * 16) + (z * 16) + x
+          const paletteIndex = getBlockStateIndex(dataArray, blockIndex, bitsPerBlock)
+          
+          if (paletteIndex >= 0 && paletteIndex < paletteBlocks.length) {
+            const blockName = paletteBlocks[paletteIndex]
+            if (!blockName.includes('air')) {
+              const worldY = yOffset + y
+              const xzKey = `${x},${z}`
+              const currentTop = topBlockMap.get(xzKey)
+              
+              if (!currentTop || worldY > currentTop.y) {
+                topBlockMap.set(xzKey, { y: worldY, blockName })
               }
             }
           }
         }
       }
     }
-
-    if (!debuggedSections) {
-      console.log(`[CLIENT] DEBUG: Sections with blockStates: ${sectionsWithBlockStates}/${sections.length}`)
-      console.log(`[CLIENT] DEBUG: Sections with palette: ${sectionsWithPalette}/${sections.length}`)
-      console.log(`[CLIENT] DEBUG: Total blocks added: ${blocksAdded}`)
-      console.log(`[CLIENT] DEBUG: blocksByXZ size: ${blocksByXZ.size}`)
-    }
-  } catch (error) {
-    console.warn(`Error parsing blocks for chunk ${chunkX},${chunkZ}:`, error)
   }
 
-  // Now find the topmost block at each X,Z position
   const topBlocks = new Map<string, string>()
-  for (const [xzKey, blockList] of blocksByXZ.entries()) {
-    // Find the block with highest Y
-    let topBlock = blockList[0]
-    for (const block of blockList) {
-      if (block.y > topBlock.y) {
-        topBlock = block
-      }
-    }
-    topBlocks.set(xzKey, topBlock.blockName)
+  for (const [xzKey, blockData] of topBlockMap.entries()) {
+    topBlocks.set(xzKey, blockData.blockName)
   }
   
-  // Debug every chunk - not just first
-  if (topBlocks.size > 0 && chunkX === 0 && chunkZ === 0) {
-    const uniqueBlocks = new Set(topBlocks.values())
-    console.log(`[CLIENT] DEBUG: Chunk ${chunkX},${chunkZ} has ${topBlocks.size} top blocks with ${uniqueBlocks.size} unique types:`, Array.from(uniqueBlocks).slice(0, 10))
-    console.log(`[CLIENT] DEBUG: First 5 topBlocks entries:`, Array.from(topBlocks.entries()).slice(0, 5))
-  }
-
   return topBlocks
 }
 
@@ -292,17 +226,6 @@ function getBlockStateIndex(data: any[], blockIndex: number, bitsPerBlock: numbe
   return Number((longValue >> shift) & mask)
 }
 
-// Parse NBT data to extract blocks (simplified version)
-// In a full implementation, you'd use prismarine-nbt here
-function parseNBTData(data: Uint8Array): Map<string, string> {
-  const blocks = new Map<string, string>()
-  
-  // This is a placeholder - real implementation would parse the NBT structure
-  // and extract block palette and block states
-  
-  return blocks
-}
-
 // Parse multiple region files
 export async function parseRegionFiles(
   files: { name: string; data: ArrayBuffer }[]
@@ -319,11 +242,21 @@ export async function parseRegionFiles(
   }
 
   console.log(`\nTotal chunks parsed: ${allChunks.length}`)
+  
+  // Debug: Check all unique blocks across all chunks
+  const allBlockTypes = new Set<string>()
+  for (const chunk of allChunks) {
+    for (const blockName of chunk.topBlocks.values()) {
+      allBlockTypes.add(blockName)
+    }
+  }
+  console.log(`Unique block types found: ${allBlockTypes.size}`)
+  console.log(`Block types:`, Array.from(allBlockTypes).sort())
 
   // Calculate bounds
   let minX = Infinity, maxX = -Infinity
   let minZ = Infinity, maxZ = -Infinity
-  let minY = -64, maxY = 320 // Default Minecraft world height
+  let minY = -64, maxY = 320
 
   for (const chunk of allChunks) {
     minX = Math.min(minX, chunk.x * 16)

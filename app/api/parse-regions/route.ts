@@ -46,6 +46,7 @@ export async function POST(request: NextRequest) {
           
           const data = await zipEntry.async('arraybuffer')
           console.log(`[SERVER]   - File size: ${data.byteLength} bytes`)
+          console.log(data)
           
           if (data.byteLength < 8192) {
             console.log(`[SERVER]   - File too small, skipping`)
@@ -249,7 +250,7 @@ function parseChunkTopBlocks(chunkData: any, chunkX: number, chunkZ: number): Ma
         console.log('[SERVER] DEBUG: No sections found. Keys:', Object.keys(chunkData?.value || {}))
         debugOnce = true
       }
-      return blocks
+      return new Map<string, string>() // Return empty Map instead of undefined "blocks"
     }
 
     for (const section of sections) {

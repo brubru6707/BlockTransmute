@@ -7,6 +7,8 @@ interface ControlsProps {
   maxY: number
   zoom: number
   onZoomChange: (zoom: number) => void
+  viewMode: '2d' | '3d'
+  onViewModeChange: (mode: '2d' | '3d') => void
 }
 
 export default function Controls({
@@ -16,9 +18,37 @@ export default function Controls({
   maxY,
   zoom,
   onZoomChange,
+  viewMode,
+  onViewModeChange,
 }: ControlsProps) {
   return (
     <div className="bg-gray-800 rounded-lg p-6 space-y-6">
+      <div>
+        <label className="block text-sm font-medium mb-2">View Mode</label>
+        <div className="flex gap-2">
+          <button
+            onClick={() => onViewModeChange('2d')}
+            className={`flex-1 px-4 py-2 rounded ${
+              viewMode === '2d'
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+            }`}
+          >
+            2D
+          </button>
+          <button
+            onClick={() => onViewModeChange('3d')}
+            className={`flex-1 px-4 py-2 rounded ${
+              viewMode === '3d'
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+            }`}
+          >
+            3D
+          </button>
+        </div>
+      </div>
+
       <div>
         <label className="block text-sm font-medium mb-2">
           Y-Level: {yLevel}
@@ -49,20 +79,33 @@ export default function Controls({
           value={zoom}
           onChange={(e) => onZoomChange(Number(e.target.value))}
           className="w-full"
+          disabled={viewMode === '3d'}
         />
         <div className="flex justify-between text-xs text-gray-500 mt-1">
           <span>0.5x</span>
           <span>4x</span>
         </div>
+        {viewMode === '3d' && (
+          <p className="text-xs text-gray-500 mt-1">Use mouse to zoom in 3D view</p>
+        )}
       </div>
 
       <div className="text-sm text-gray-400 border-t border-gray-700 pt-4">
         <p className="mb-1">Controls:</p>
-        <ul className="text-xs space-y-1">
-          <li>• Click and drag to pan</li>
-          <li>• Mouse wheel to zoom</li>
-          <li>• Slider to change Y-level</li>
-        </ul>
+        {viewMode === '2d' ? (
+          <ul className="text-xs space-y-1">
+            <li>• Click and drag to pan</li>
+            <li>• Mouse wheel to zoom</li>
+            <li>• Slider to change Y-level</li>
+          </ul>
+        ) : (
+          <ul className="text-xs space-y-1">
+            <li>• Left click + drag to rotate</li>
+            <li>• Right click + drag to pan</li>
+            <li>• Mouse wheel to zoom</li>
+            <li>• Slider to change Y-level</li>
+          </ul>
+        )}
       </div>
     </div>
   )

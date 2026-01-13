@@ -83,7 +83,7 @@ export const blockColors: { [key: string]: string } = {
   'minecraft:bedrock': '#2C2C2C',
 
   // Default fallback
-  'default': '#808080',
+  'default': '#000000',
 }
 
 export function getBlockColor(blockName: string): string {

@@ -3,8 +3,11 @@
 import { useState } from 'react'
 import FileUpload from './components/FileUpload'
 import CanvasViewer from './components/CanvasViewer'
+import Viewer3D from './components/Viewer3D'
 import Controls from './components/Controls'
+import FileInfo from './components/FileInfo'
 import { parseRegionFiles, RegionData } from './utils/mcaParser'
+import { getBlockColor } from './utils/blockColors'
 
 export default function Home() {
   const [regionData, setRegionData] = useState<RegionData | null>(null)
@@ -12,9 +15,13 @@ export default function Home() {
   const [zoom, setZoom] = useState(1)
   const [isLoading, setIsLoading] = useState(false)
   const [useServer, setUseServer] = useState(true)
+  const [blocksFound, setBlocksFound] = useState<Set<string>>(new Set())
+  const [fileNames, setFileNames] = useState<string[]>([])
+  const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d')
 
   const handleFilesLoad = async (files: { name: string; data: ArrayBuffer }[]) => {
     setIsLoading(true)
+    setFileNames(files.map(f => f.name))
     try {
       const data = await parseRegionFiles(files)
       console.log('[CLIENT] Parsed data:', data)
@@ -93,7 +100,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-gray-900 text-white p-4">
       <div className="max-w-7xl mx-auto">
-        <h1 className="text-4xl font-bold mb-6">Minecraft 2D Viewer</h1>
+        <h1 className="text-4xl font-bold mb-6">Minecraft World Viewer</h1>
         
         {!regionData ? (
           <div className="max-w-2xl mx-auto mt-20">
@@ -111,15 +118,43 @@ export default function Home() {
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-            <div className="lg:col-span-3 h-[600px]">
-              <CanvasViewer
-                regionData={regionData}
-                yLevel={yLevel}
-                zoom={zoom}
-                onZoomChange={setZoom}
-              />
+            <div className="lg:col-span-3 space-y-4">
+              <div className="h-[600px]">
+                {viewMode === '2d' ? (
+                  <CanvasViewer
+                    regionData={regionData}
+                    yLevel={yLevel}
+                    zoom={zoom}
+                    onZoomChange={setZoom}
+                    onBlocksFound={setBlocksFound}
+                  />
+                ) : (
+                  <Viewer3D
+                    regionData={regionData}
+                    yLevel={yLevel}
+                  />
+                )}
+              </div>
+              {blocksFound.size > 0 && (
+                <div className="bg-gray-800 rounded-lg p-4">
+                  <div className="font-pixel text-sm leading-relaxed">
+                    <span className="text-gray-300">Blocks: </span>
+                    {Array.from(blocksFound)
+                      .sort()
+                      .map((blockName, index) => {
+                        const displayName = blockName.replace('minecraft:', '').replace(/_/g, ' ')
+                        const color = getBlockColor(blockName)
+                        return (
+                          <span key={blockName}>
+                            {index > 0 && ', '}
+                            <span style={{ color }}>{displayName}</span>
+                          </span>
+                        )
+                      })}
+                  </div>
+                </div>
+              )}
             </div>
-            <div className="lg:col-span-1">
               <Controls
                 yLevel={yLevel}
                 onYLevelChange={setYLevel}
@@ -127,19 +162,25 @@ export default function Home() {
                 maxY={regionData.maxY}
                 zoom={zoom}
                 onZoomChange={setZoom}
+                viewMode={viewMode}
+                onViewModeChange={setViewMode}
+              />
+              <FileInfo 
+                regionData={regionData} 
+                fileNames={fileNames}
               />
               <button
                 onClick={() => {
                   setRegionData(null)
                   setYLevel(64)
                   setZoom(1)
+                  setFileNames([])
                 }}
                 className="mt-4 w-full bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded transition"
               >
                 Load Different Files
               </button>
             </div>
-          </div>
         )}
       </div>
     </main>

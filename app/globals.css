@@ -1,3 +1,18 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Import pixel font from Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+/* Pixel font class */
+.font-pixel {
+  font-family: 'Press Start 2P', monospace;
+}
+
+/* Ensure Three.js canvas fills container */
+canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
