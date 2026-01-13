@@ -4,12 +4,15 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 import { RegionData } from '../utils/mcaParser'
 import { getBlockColor } from '../utils/blockColors'
 
+export type InteractionMode = 'move' | 'select'
+
 interface CanvasViewerProps {
   regionData: RegionData | null
   yLevel: number
   zoom: number
   onZoomChange: (zoom: number) => void
   onBlocksFound?: (blocks: Set<string>) => void
+  interactionMode: InteractionMode
 }
 
 export default function CanvasViewer({
@@ -18,12 +21,25 @@ export default function CanvasViewer({
   zoom,
   onZoomChange,
   onBlocksFound,
+  interactionMode,
 }: CanvasViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
+  const [selectionPoints, setSelectionPoints] = useState<{ x: number; y: number }[]>([])
+  const [hoveredPoint, setHoveredPoint] = useState<{ x: number; y: number } | null>(null)
+  const [minYExport, setMinYExport] = useState<number>(0)
+  const [maxYExport, setMaxYExport] = useState<number>(0)
+
+  // Update Y export range when regionData changes
+  useEffect(() => {
+    if (regionData) {
+      setMinYExport(regionData.minY)
+      setMaxYExport(regionData.maxY)
+    }
+  }, [regionData])
 
   useEffect(() => {
     const renderStart = performance.now()
@@ -188,23 +204,100 @@ export default function CanvasViewer({
     ctx.fillStyle = '#FFFFFF'
     ctx.fillText(coordText, centerScreenX, centerScreenY)
 
+    // Draw selection quadrilateral if in select mode
+    if (interactionMode === 'select') {
+      // Draw completed quadrilateral
+      if (selectionPoints.length === 4) {
+        ctx.strokeStyle = '#00FF00'
+        ctx.fillStyle = 'rgba(0, 255, 0, 0.2)'
+        ctx.lineWidth = 2
+        
+        ctx.beginPath()
+        ctx.moveTo(selectionPoints[0].x, selectionPoints[0].y)
+        ctx.lineTo(selectionPoints[1].x, selectionPoints[1].y)
+        ctx.lineTo(selectionPoints[2].x, selectionPoints[2].y)
+        ctx.lineTo(selectionPoints[3].x, selectionPoints[3].y)
+        ctx.closePath()
+        ctx.fill()
+        ctx.stroke()
+      } else if (selectionPoints.length > 0) {
+        // Draw partial selection
+        ctx.strokeStyle = '#FFFF00'
+        ctx.lineWidth = 2
+        
+        ctx.beginPath()
+        ctx.moveTo(selectionPoints[0].x, selectionPoints[0].y)
+        for (let i = 1; i < selectionPoints.length; i++) {
+          ctx.lineTo(selectionPoints[i].x, selectionPoints[i].y)
+        }
+        if (hoveredPoint) {
+          ctx.lineTo(hoveredPoint.x, hoveredPoint.y)
+        }
+        ctx.stroke()
+      }
+      
+      // Draw selection points
+      selectionPoints.forEach((point, index) => {
+        ctx.fillStyle = '#FFFF00'
+        ctx.beginPath()
+        ctx.arc(point.x, point.y, 5, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.strokeStyle = '#000000'
+        ctx.lineWidth = 1
+        ctx.stroke()
+        
+        // Draw point label
+        ctx.fillStyle = '#FFFFFF'
+        ctx.font = '12px Arial'
+        ctx.fillText(`${index + 1}`, point.x + 8, point.y - 8)
+      })
+    }
+
     const totalRenderTime = performance.now() - renderStart
     console.log(`[CANVAS] === Total render time: ${totalRenderTime.toFixed(2)}ms ===\n`)
-  }, [regionData, yLevel, zoom, pan])
+  }, [regionData, yLevel, zoom, pan, interactionMode, selectionPoints, hoveredPoint])
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    setIsDragging(true)
-    setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y })
+    if (interactionMode === 'move') {
+      setIsDragging(true)
+      setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y })
+    } else if (interactionMode === 'select') {
+      const canvas = canvasRef.current
+      if (!canvas) return
+      
+      const rect = canvas.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      const y = e.clientY - rect.top
+      
+      if (selectionPoints.length < 4) {
+        setSelectionPoints([...selectionPoints, { x, y }])
+      } else {
+        // Reset selection if clicking after completing quadrilateral
+        setSelectionPoints([{ x, y }])
+      }
+    }
     e.preventDefault()
   }
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging) return
-    e.preventDefault()
-    setPan({
-      x: e.clientX - dragStart.x,
-      y: e.clientY - dragStart.y,
-    })
+    if (interactionMode === 'move' && isDragging) {
+      e.preventDefault()
+      setPan({
+        x: e.clientX - dragStart.x,
+        y: e.clientY - dragStart.y,
+      })
+    } else if (interactionMode === 'select') {
+      const canvas = canvasRef.current
+      if (!canvas) return
+      
+      const rect = canvas.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      const y = e.clientY - rect.top
+      
+      if (selectionPoints.length > 0 && selectionPoints.length < 4) {
+        setHoveredPoint({ x, y })
+      }
+    }
   }
 
   const handleMouseUp = (e: React.MouseEvent) => {
@@ -229,17 +322,186 @@ export default function CanvasViewer({
     }
   }, [handleWheel])
 
+  const exportSelection = useCallback(() => {
+    if (!regionData || selectionPoints.length !== 4 || !canvasRef.current) {
+      alert('Please complete a quadrilateral selection first')
+      return
+    }
+
+    if (minYExport > maxYExport) {
+      alert('Min Y level cannot be greater than Max Y level')
+      return
+    }
+
+    const canvas = canvasRef.current
+    const worldWidth = regionData.maxX - regionData.minX
+    const worldHeight = regionData.maxZ - regionData.minZ
+    const scaleX = (canvas.width * 0.8) / worldWidth
+    const scaleY = (canvas.height * 0.8) / worldHeight
+    const baseScale = Math.min(scaleX, scaleY)
+    const scale = baseScale * zoom
+    const offsetX = canvas.width / 2 - (worldWidth * scale) / 2 + pan.x
+    const offsetY = canvas.height / 2 - (worldHeight * scale) / 2 + pan.y
+
+    // Convert screen coordinates to world coordinates
+    const worldPoints = selectionPoints.map(point => ({
+      x: Math.floor((point.x - offsetX) / scale + regionData.minX),
+      z: Math.floor((point.y - offsetY) / scale + regionData.minZ)
+    }))
+
+    // Find blocks within quadrilateral
+    const selectedBlocks: Array<{ x: number, z: number, y: number, block: string }> = []
+    
+    // Get bounds of quadrilateral
+    const minX = Math.min(...worldPoints.map(p => p.x))
+    const maxX = Math.max(...worldPoints.map(p => p.x))
+    const minZ = Math.min(...worldPoints.map(p => p.z))
+    const maxZ = Math.max(...worldPoints.map(p => p.z))
+
+    // Check each block in bounds if it's inside quadrilateral
+    for (const chunk of regionData.chunks) {
+      for (let x = 0; x < 16; x++) {
+        for (let z = 0; z < 16; z++) {
+          const worldX = chunk.x * 16 + x
+          const worldZ = chunk.z * 16 + z
+          
+          if (worldX < minX || worldX > maxX || worldZ < minZ || worldZ > maxZ) continue
+          
+          // Check if point is inside quadrilateral
+          if (isPointInPolygon(
+            { x: worldX, z: worldZ },
+            worldPoints
+          )) {
+            const xzKey = `${x},${z}`
+            const blockName = chunk.topBlocks.get(xzKey)
+            if (blockName) {
+              // Add blocks for each Y level in range
+              for (let y = minYExport; y <= maxYExport; y++) {
+                selectedBlocks.push({
+                  x: worldX,
+                  z: worldZ,
+                  y: y,
+                  block: blockName // Note: This is the top block, not actual block at each Y
+                })
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Export data as JSON
+    const exportData = {
+      selection: {
+        type: 'quadrilateral',
+        worldCoordinates: worldPoints,
+        yRange: {
+          min: minYExport,
+          max: maxYExport
+        }
+      },
+      blocks: selectedBlocks,
+      summary: {
+        totalBlocks: selectedBlocks.length,
+        uniqueBlockTypes: new Set(selectedBlocks.map(b => b.block)).size,
+        yLevels: maxYExport - minYExport + 1
+      }
+    }
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `selection_${Date.now()}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [regionData, selectionPoints, zoom, pan, minYExport, maxYExport])
+
+  // Helper function to check if point is inside polygon using ray casting
+  const isPointInPolygon = (
+    point: { x: number; z: number },
+    vertices: { x: number; z: number }[]
+  ): boolean => {
+    let inside = false
+    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+      const xi = vertices[i].x
+      const zi = vertices[i].z
+      const xj = vertices[j].x
+      const zj = vertices[j].z
+      
+      const intersect = ((zi > point.z) !== (zj > point.z)) &&
+        (point.x < (xj - xi) * (point.z - zi) / (zj - zi) + xi)
+      
+      if (intersect) inside = !inside
+    }
+    return inside
+  }
+
   return (
     <div ref={containerRef} className="relative w-full h-full bg-gray-900 rounded-lg overflow-hidden">
       <canvas
         ref={canvasRef}
-        className="w-full h-full cursor-move"
+        className={`w-full h-full ${
+          interactionMode === 'move' ? 'cursor-move' : 'cursor-crosshair'
+        }`}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
         style={{ touchAction: 'none' }}
       />
+      {interactionMode === 'select' && (
+        <div className="absolute top-4 right-4 flex flex-col gap-2 max-w-xs">
+          <div className="bg-gray-800 px-3 py-2 rounded text-sm">
+            {selectionPoints.length === 0 && 'Click 4 points to create a quadrilateral'}
+            {selectionPoints.length === 1 && 'Click 3 more points'}
+            {selectionPoints.length === 2 && 'Click 2 more points'}
+            {selectionPoints.length === 3 && 'Click 1 more point'}
+            {selectionPoints.length === 4 && 'Selection complete!'}
+          </div>
+          {selectionPoints.length > 0 && (
+            <button
+              onClick={() => setSelectionPoints([])}
+              className="bg-red-600 hover:bg-red-700 px-3 py-2 rounded text-sm transition"
+            >
+              Clear Selection
+            </button>
+          )}
+          {selectionPoints.length === 4 && regionData && (
+            <div className="bg-gray-800 px-3 py-2 rounded space-y-2">
+              <div className="text-xs font-medium text-gray-300">Export Y Range:</div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-400">Min:</label>
+                <input
+                  type="number"
+                  value={minYExport}
+                  onChange={(e) => setMinYExport(Number(e.target.value))}
+                  min={regionData.minY}
+                  max={regionData.maxY}
+                  className="w-20 bg-gray-700 text-white px-2 py-1 rounded text-xs"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-400">Max:</label>
+                <input
+                  type="number"
+                  value={maxYExport}
+                  onChange={(e) => setMaxYExport(Number(e.target.value))}
+                  min={regionData.minY}
+                  max={regionData.maxY}
+                  className="w-20 bg-gray-700 text-white px-2 py-1 rounded text-xs"
+                />
+              </div>
+              <button
+                onClick={exportSelection}
+                className="w-full bg-green-600 hover:bg-green-700 px-3 py-2 rounded text-sm transition"
+              >
+                Export Selection
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       {!regionData && (
         <div className="absolute inset-0 flex items-center justify-center text-gray-500">
           No region data loaded

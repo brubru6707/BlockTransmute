@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import FileUpload from './components/FileUpload'
-import CanvasViewer from './components/CanvasViewer'
+import CanvasViewer, { InteractionMode } from './components/CanvasViewer'
 import Viewer3D from './components/Viewer3D'
 import Controls from './components/Controls'
 import FileInfo from './components/FileInfo'
@@ -18,6 +18,7 @@ export default function Home() {
   const [blocksFound, setBlocksFound] = useState<Set<string>>(new Set())
   const [fileNames, setFileNames] = useState<string[]>([])
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d')
+  const [interactionMode, setInteractionMode] = useState<InteractionMode>('move')
 
   const handleFilesLoad = async (files: { name: string; data: ArrayBuffer }[]) => {
     setIsLoading(true)
@@ -127,6 +128,7 @@ export default function Home() {
                     zoom={zoom}
                     onZoomChange={setZoom}
                     onBlocksFound={setBlocksFound}
+                    interactionMode={interactionMode}
                   />
                 ) : (
                   <Viewer3D
@@ -164,6 +166,8 @@ export default function Home() {
                 onZoomChange={setZoom}
                 viewMode={viewMode}
                 onViewModeChange={setViewMode}
+                interactionMode={interactionMode}
+                onInteractionModeChange={setInteractionMode}
               />
               <FileInfo 
                 regionData={regionData} 

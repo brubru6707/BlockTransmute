@@ -107,55 +107,68 @@ export async function parseMCAFile(data: ArrayBuffer, filename: string): Promise
   return chunks
 }
 
-// Parse top blocks from NBT chunk data (highest non-air block at each X,Z)
+// Optimized: Scan from Sky to Bedrock with Early Exit
 function parseChunkTopBlocks(chunkData: any, chunkX: number, chunkZ: number): Map<string, string> {
-  const topBlockMap = new Map<string, {y: number, blockName: string}>()
+  const topBlocks = new Map<string, string>() // Final results stored here immediately
   
-  // Navigate to sections array
+  // 1. Get Sections safely
   const sections = chunkData?.value?.sections?.value?.value || chunkData?.value?.Level?.value?.Sections?.value?.value
-  
-  if (!sections || !Array.isArray(sections)) {
-    return new Map<string, string>()
-  }
-  
-  for (const section of sections) {
-    const sectionValue = section.value || section
-    
-    // Robust Y-parsing: Handle object wrappers and primitive values
-    let sectionY = sectionValue.Y?.value ?? sectionValue.y?.value ?? sectionValue.Y ?? sectionValue.y ?? 0
-    if (typeof sectionY === 'object') sectionY = 0 
+  if (!sections || !Array.isArray(sections)) return topBlocks
 
+  // 2. Sort Sections Descending (Highest Y first)
+  // We scan from the sky down so we can stop searching as soon as we hit a block.
+  const sortedSections = sections.slice().sort((a: any, b: any) => {
+    const aY = (a.value || a).Y?.value ?? (a.value || a).y?.value ?? 0
+    const bY = (b.value || b).Y?.value ?? (b.value || b).y?.value ?? 0
+    return bY - aY // Descending sort (e.g., 15, 14, ... -4)
+  })
+
+  // 3. Track columns we have already solved (0-255 linear index for 16x16 chunk)
+  // A simple integer array is much faster than checking a Set or Map repeatedly.
+  // 0 = empty/air so far, 1 = found a top block
+  const completedColumns = new Uint8Array(256) 
+  let columnsFound = 0
+
+  for (const section of sortedSections) {
+    // Optimization: If we have found a top block for every single X,Z pixel, 
+    // we can stop parsing this chunk entirely! No need to read bedrock/caves.
+    if (columnsFound === 256) break 
+
+    const sectionValue = section.value || section
+    let sectionY = sectionValue.Y?.value ?? sectionValue.y?.value ?? 0
+    if (typeof sectionY === 'object') sectionY = 0
     const yOffset = sectionY * 16
-    
-    // Get block states (Support both 1.16+ naming 'block_states' and older 'BlockStates')
+
+    // Get Palette/States
     const blockStates = sectionValue.block_states?.value || sectionValue.BlockStates?.value
     if (!blockStates) continue
 
-    // Get palette
     const palette = blockStates.palette?.value?.value || blockStates.Palette?.value?.value
     if (!palette || !Array.isArray(palette)) continue
 
-    // Extract block names from palette
-    const paletteBlocks = palette.map((entry: any) => {
-      return entry.value?.Name?.value || entry.Name?.value || 'minecraft:air'
-    })
+    const paletteBlocks = palette.map((entry: any) => 
+      entry.value?.Name?.value || entry.Name?.value || 'minecraft:air'
+    )
 
-    // === CASE 1: UNIFORM SECTION (Single Block) ===
-    // If only 1 block type exists, the whole 16x16x16 chunk is filled with it.
+    // === CASE 1: UNIFORM SECTION (Single Block Type) ===
     if (paletteBlocks.length === 1) {
       const blockName = paletteBlocks[0]
-      if (!blockName.includes('air')) {
-        for (let y = 0; y < 16; y++) {
-          for (let x = 0; x < 16; x++) {
-            for (let z = 0; z < 16; z++) {
-              const worldY = yOffset + y
-              const xzKey = `${x},${z}`
-              const currentTop = topBlockMap.get(xzKey)
-              
-              if (!currentTop || worldY > currentTop.y) {
-                topBlockMap.set(xzKey, { y: worldY, blockName })
-              }
-            }
+      if (blockName.includes('air')) continue // Whole section is air, skip it
+
+      // Whole section is solid. Fill in any gaps in our map.
+      // We assume the highest point in this solid section is the top (y=15).
+      for (let z = 0; z < 16; z++) {
+        for (let x = 0; x < 16; x++) {
+          const colIndex = (z * 16) + x
+          
+          // SPEED CHECK: Only process if we haven't found this column yet
+          if (completedColumns[colIndex] === 0) {
+            const worldY = yOffset + 15 
+            const xzKey = `${x},${z}`
+            
+            topBlocks.set(xzKey, blockName)
+            completedColumns[colIndex] = 1
+            columnsFound++
           }
         }
       }
@@ -163,46 +176,41 @@ function parseChunkTopBlocks(chunkData: any, chunkX: number, chunkZ: number): Ma
     }
 
     // === CASE 2: COMPLEX SECTION (Mixed Blocks) ===
-    // FIX: Robustly find the data array. Try ALL known locations.
     const dataTag = blockStates.data || blockStates.Data
+    // Use the robust accessor that fixed your bug:
     const dataArray = dataTag?.value?.value || dataTag?.value
-    
-    if (!dataArray || !Array.isArray(dataArray)) {
-        // If we have a complex palette but no data, we cannot parse this section.
-        // This log will help us confirm if we are still missing data.
-        // console.warn(`[DEBUG] Skipped complex section at Y=${sectionY} (Palette=${paletteBlocks.length}, No Data Found)`)
-        continue
-    }
+    if (!dataArray) continue
 
-    // Calculate bits per block
     const bitsPerBlock = Math.max(4, Math.ceil(Math.log2(paletteBlocks.length)))
     
-    for (let y = 0; y < 16; y++) {
-      for (let x = 0; x < 16; x++) {
-        for (let z = 0; z < 16; z++) {
+    // Iterate Y from 15 down to 0 (Top of section to bottom)
+    for (let y = 15; y >= 0; y--) {
+      for (let z = 0; z < 16; z++) {
+        for (let x = 0; x < 16; x++) {
+          
+          const colIndex = (z * 16) + x
+          
+          // SPEED CHECK: Skip expensive bitwise math if we already know this column
+          if (completedColumns[colIndex] === 1) continue 
+
           const blockIndex = (y * 16 * 16) + (z * 16) + x
           const paletteIndex = getBlockStateIndex(dataArray, blockIndex, bitsPerBlock)
           
           if (paletteIndex >= 0 && paletteIndex < paletteBlocks.length) {
             const blockName = paletteBlocks[paletteIndex]
+            
             if (!blockName.includes('air')) {
               const worldY = yOffset + y
               const xzKey = `${x},${z}`
-              const currentTop = topBlockMap.get(xzKey)
               
-              if (!currentTop || worldY > currentTop.y) {
-                topBlockMap.set(xzKey, { y: worldY, blockName })
-              }
+              topBlocks.set(xzKey, blockName)
+              completedColumns[colIndex] = 1
+              columnsFound++
             }
           }
         }
       }
     }
-  }
-
-  const topBlocks = new Map<string, string>()
-  for (const [xzKey, blockData] of topBlockMap.entries()) {
-    topBlocks.set(xzKey, blockData.blockName)
   }
   
   return topBlocks
